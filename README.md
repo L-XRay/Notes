@@ -1,7 +1,7 @@
 # 目录
 
 - 基础
-  - 设计模式 更新ing
+  - 设计模式
   
     > [源码](https://github.com/L-XRay/design)
   
