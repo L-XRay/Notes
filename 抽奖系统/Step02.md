@@ -19,3 +19,6 @@
 ps：这里只简单测试调用 rpc ，因此这里 接口层直接引入基础层仓储服务进行测试。
 
 ![step02.drawio](images/step02.drawio.png)
+
+
+
