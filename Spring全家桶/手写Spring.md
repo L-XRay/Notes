@@ -846,7 +846,7 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 
 1. 进一步了解和完善了Bean的生命周期。
 
-![step08-第 2 页.drawio](images/step08-第 2 页.drawio.png)
+![step08-第 2 页.drawio](images/step08.drawio.png)
 
 ![Bean的生命周期](images/Bean的生命周期.png)
 
@@ -1487,7 +1487,7 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
    - https://blog.csdn.net/psd0503/article/details/107116881
    - https://www.cnblogs.com/xy7112/p/16400997.html
 
-![step11-第 3 页.drawio](images/step11-第 3 页.drawio.png)
+![step11-第 3 页.drawio](images/step11.drawio.png)
 
 ## Step12：利用 BeanPostProcessor 将AOP扩展到Bean的生命周期
 
@@ -1794,7 +1794,7 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 2. 在 AbstractApplicationContext 刷新上下文中 提前注册 DefaultAdvisorAutoProxyCreator 以便后续的代理操作。
 3. DefaultAdvisorAutoProxyCreator.postProcessBeforeInstantiation(beanClass, beanName) 中 主要提供AspectJExpressionPointcutAdvisor 切面访问者 的处理，通过 表达式匹配 matches 、包装目标类 TargetSource、配置 AdvisedSupport、新建代理工厂 ProxyFactory(AdvisedSupport)  返回 代理对象。
 
-![step12-第 3 页.drawio](images/step12-第 3 页.drawio.png)
+![step12-第 3 页.drawio](images/step12.drawio.png)
 
 ## Step13：利用 自定义注解 实现Bean的自动化扫描注册
 
@@ -1988,4 +1988,4 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 
 1. 经过这几章AOP的学习，对 整个Spring的扩展有了一定的了解，本质上就是在 完善 Bean的生命周期，使得整个Spring的功能使用更加方便快捷。
 
-![step13-第 2 页.drawio](images/step13-第 2 页.drawio.png)
+![step13-第 2 页.drawio](images/step13.drawio.png)
