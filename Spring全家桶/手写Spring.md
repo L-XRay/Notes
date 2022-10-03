@@ -1795,3 +1795,197 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 3. DefaultAdvisorAutoProxyCreator.postProcessBeforeInstantiation(beanClass, beanName) 中 主要提供AspectJExpressionPointcutAdvisor 切面访问者 的处理，通过 表达式匹配 matches 、包装目标类 TargetSource、配置 AdvisedSupport、新建代理工厂 ProxyFactory(AdvisedSupport)  返回 代理对象。
 
 ![step12-第 3 页.drawio](images/step12-第 3 页.drawio.png)
+
+## Step13：利用 自定义注解 实现Bean的自动化扫描注册
+
+### 实现： 
+
+1. 定义拦截注解
+   1. 定义 @Scope 注解，用于标记Bean对象的作用域。
+   2. 定义 @Component 注解，用于标记是否为注册Bean，提供 value 属性指定BeanName。
+   
+2. 处理对象扫描装配
+   1. 定义 ClassPathScanningCandidateComponentProvider 类，具有 findCandidateComponents(String basePackage) 扫描并获取指定包下的所有@Component注解下的BeanDefinition
+   
+      ```java
+      public class ClassPathScanningCandidateComponentProvider {
+      
+          public Set<BeanDefinition> findCandidateComponents(String basePackage) {
+              Set<BeanDefinition> candidates = new LinkedHashSet<>();
+              Set<Class<?>> classes = ClassUtil.scanPackageByAnnotation(basePackage, Component.class);
+              for (Class<?> clazz : classes) {
+                  candidates.add(new BeanDefinition(clazz));
+              }
+              return candidates;
+          }
+      }
+      ```
+   
+   2. 定义 ClassPathBeanDefinitionScanner 扫描包处理类，继承于ClassPathScanningCandidateComponentProvider ，具有 doScan(String... basePackage) 扫描处理方法，主要用于 扫描多个包下的BeanDefinition，之后通过 自定义注解 @Scope 以及 @Component 获取并配置其作用域和BeanName进行注册。
+   
+      ```java
+      public class ClassPathBeanDefinitionScanner extends ClassPathScanningCandidateComponentProvider {
+      
+          private BeanDefinitionRegistry registry;
+      
+          public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry) {
+              this.registry = registry;
+          }
+      
+          public void doScan(String... basePackages) {
+              for (String basePackage : basePackages) {
+                  Set<BeanDefinition> beanDefinitions = findCandidateComponents(basePackage);
+                  for (BeanDefinition beanDefinition : beanDefinitions) {
+                      // 解析 Bean 的作用域 singleton、prototype
+                      String beanScope = resolveBeanScope(beanDefinition);
+                      if (StrUtil.isNotEmpty(beanScope)) {
+                          beanDefinition.setScope(beanScope);
+                      }
+                      registry.registerBeanDefinition(determineBeanName(beanDefinition), beanDefinition);
+                  }
+              }
+          }
+      
+          private String resolveBeanScope(BeanDefinition beanDefinition) {
+              Class<?> beanClass = beanDefinition.getBeanClass();
+              Scope scope = beanClass.getAnnotation(Scope.class);
+              if (null != scope) return scope.value();
+              return StrUtil.EMPTY;
+          }
+      
+          // 配置 beanName
+          private String determineBeanName(BeanDefinition beanDefinition) {
+              Class<?> beanClass = beanDefinition.getBeanClass();
+              Component component = beanClass.getAnnotation(Component.class);
+              String value = component.value();
+              if (StrUtil.isEmpty(value)) {
+                  // 首字母小写
+                  value = StrUtil.lowerFirst(beanClass.getSimpleName());
+              }
+              return value;
+          }
+      
+      }
+      ```
+   
+3. 完善 XmlBeanDefinitionReader ，在 doLoadBeanDefinitions 解析注册操作 中新增对 context:component-scan 标签的解析，之后调用ClassPathBeanDefinitionScanner.doScan 方法进行Bean注册操作。 
+
+   ```java
+   protected void doLoadBeanDefinitions(InputStream inputStream) throws ClassNotFoundException, DocumentException {
+           SAXReader reader = new SAXReader();
+           Document document = reader.read(inputStream);
+           Element root = document.getRootElement();
+   
+           // 解析 context:component-scan 标签，扫描包中的类并提取相关信息，用于组装 BeanDefinition
+           Element componentScan = root.element("component-scan");
+           if (null != componentScan) {
+               String scanPath = componentScan.attributeValue("base-package");
+               if (StrUtil.isEmpty(scanPath)) {
+                   throw new BeansException("The value of base-package attribute can not be empty or null");
+               }
+               scanPackage(scanPath);
+           }
+   
+           List<Element> beanList = root.elements("bean");
+           for (Element bean : beanList) {
+   
+               String id = bean.attributeValue("id");
+               String name = bean.attributeValue("name");
+               String className = bean.attributeValue("class");
+               String initMethod = bean.attributeValue("init-method");
+               String destroyMethodName = bean.attributeValue("destroy-method");
+               String beanScope = bean.attributeValue("scope");
+   
+               // 获取 Class，方便获取类中的名称
+               Class<?> clazz = Class.forName(className);
+               // 优先级 id > name
+               String beanName = StrUtil.isNotEmpty(id) ? id : name;
+               if (StrUtil.isEmpty(beanName)) {
+                   beanName = StrUtil.lowerFirst(clazz.getSimpleName());
+               }
+   
+               // 定义Bean
+               BeanDefinition beanDefinition = new BeanDefinition(clazz);
+               beanDefinition.setInitMethodName(initMethod);
+               beanDefinition.setDestroyMethodName(destroyMethodName);
+   
+               if (StrUtil.isNotEmpty(beanScope)) {
+                   beanDefinition.setScope(beanScope);
+               }
+   
+               List<Element> propertyList = bean.elements("property");
+               // 读取属性并填充
+               for (Element property : propertyList) {
+                   // 解析标签：property
+                   String attrName = property.attributeValue("name");
+                   String attrValue = property.attributeValue("value");
+                   String attrRef = property.attributeValue("ref");
+                   // 获取属性值：引入对象、值对象
+                   Object value = StrUtil.isNotEmpty(attrRef) ? new BeanReference(attrRef) : attrValue;
+                   // 创建属性信息
+                   PropertyValue propertyValue = new PropertyValue(attrName, value);
+                   beanDefinition.getPropertyValues().addPropertyValue(propertyValue);
+               }
+               if (getRegistry().containsBeanDefinition(beanName)) {
+                   throw new BeansException("Duplicate beanName[" + beanName + "] is not allowed");
+               }
+               // 注册 BeanDefinition
+               getRegistry().registerBeanDefinition(beanName, beanDefinition);
+           }
+       }
+   
+       private void scanPackage(String scanPath) {
+           String[] basePackages = StrUtil.splitToArray(scanPath, ',');
+           ClassPathBeanDefinitionScanner scanner = new ClassPathBeanDefinitionScanner(getRegistry());
+           scanner.doScan(basePackages);
+   }
+   ```
+
+### 扩展：利用 BeanFactoryPostProcessor 进行占位符配置（${ xxx }） 
+
+1. 定义 PropertyPlaceholderConfigurer 配置类，实现 BeanFactoryPostProcessor 接口，在其 postProcessBeanFactory 方法下，处理占位符配置，首先获取 所有BeanDefinition 具有指定前后缀即形如 ${key} 的 Bean属性，之后解析指定路径下的 properties 配置文件中相同 key 的值，通过 replace 字符串替换，将 BeanDefinition 属性值 变为 配置文件中对应 key 的值。最后通过propertyValues.addPropertyValue(new PropertyValue(propertyValue.getName(), buffer.toString())); 进行Bean属性信息的替换。 
+
+   ```java
+   public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
+           // 加载属性文件
+           try {
+               DefaultResourceLoader resourceLoader = new DefaultResourceLoader();
+               Resource resource = resourceLoader.getResource(location);
+               Properties properties = new Properties();
+               properties.load(resource.getInputStream());
+   
+               String[] beanDefinitionNames = beanFactory.getBeanDefinitionNames();
+               for (String beanName : beanDefinitionNames) {
+                   BeanDefinition beanDefinition = beanFactory.getBeanDefinition(beanName);
+   
+                   PropertyValues propertyValues = beanDefinition.getPropertyValues();
+                   for (PropertyValue propertyValue : propertyValues.getPropertyValues()) {
+                       Object value = propertyValue.getValue();
+                       if (!(value instanceof String)) continue;
+                       // bean 定义的value
+                       String strVal = (String) value;
+                       StringBuilder buffer = new StringBuilder(strVal);
+                       int startIdx = strVal.indexOf(DEFAULT_PLACEHOLDER_PREFIX);
+                       int stopIdx = strVal.indexOf(DEFAULT_PLACEHOLDER_SUFFIX);
+                       // 如果存在占位符，从配置文件中提取属性并替换bean定义
+                       if (startIdx != -1 && stopIdx != -1 && startIdx < stopIdx) {
+                           String propKey = strVal.substring(startIdx + 2, stopIdx);
+                           // 从配置文件中 拿到指定 key 的 value
+                           String propVal = properties.getProperty(propKey);
+                           // 替换
+                           buffer.replace(startIdx, stopIdx + 1, propVal);
+                           propertyValues.addPropertyValue(new PropertyValue(propertyValue.getName(), buffer.toString()));
+                       }
+                   }
+               }
+           } catch (IOException e) {
+               throw new BeansException("Could not load properties", e);
+           }
+   }
+   ```
+
+### 结果： 
+
+1. 经过这几章AOP的学习，对 整个Spring的扩展有了一定的了解，本质上就是在 完善 Bean的生命周期，使得整个Spring的功能使用更加方便快捷。
+
+![step13-第 2 页.drawio](images/step13-第 2 页.drawio.png)
