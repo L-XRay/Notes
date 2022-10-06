@@ -7,7 +7,7 @@
 
 ![模板模式处理抽奖流程.drawio](images/模板模式处理抽奖流程.drawio.png)
 
-**ApiTest**
+## ApiTest
 
 ```java
 @Test
@@ -19,4 +19,5 @@ public void test_drawExec() {
 }
 ```
 
-![截屏2022-10-06 09.06.06](images/截屏2022-10-06 09.06.06.png)
+![2022-10-06 09.06.06](images/ApiTest2.png)
+

@@ -4,7 +4,7 @@
 
 Tips：当前只有使用 单项概率 策略时才会初始化概率元祖，而奖品概率信息是在初始化时才会被存放到内存中，即使用 总体概率 策略时 会报 `awardRateInfoMap` 空指针异常
 
-**ApiTest**
+## ApiTest
 
 ```java
 package cn.ray.test;
@@ -65,4 +65,5 @@ public class DrawAlgorithm {
 }
 ```
 
-![截屏2022-10-06 09.10.39](images/截屏2022-10-06 09.10.39.png)
+![2022-10-06 09.10.39](images/ApiTest1.png)
+
