@@ -1989,3 +1989,358 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 1. 经过这几章AOP的学习，对 整个Spring的扩展有了一定的了解，本质上就是在 完善 Bean的生命周期，使得整个Spring的功能使用更加方便快捷。
 
 ![step13-第 2 页.drawio](images/step13.drawio.png)
+
+## Step14：利用 BeanPostProcessor 实现Bean属性的注解注入
+
+### 实现： 
+
+1. 定义属性注入相关注解
+
+   1. 定义 @Autowired 注解，用于标记Bean注入的依赖对象。
+   2. 定义 @Qualifier 注解，用于标记Bean注入的依赖对象的具体名字。提供 value 属性指定 具体的beanName 1.3 定义 @Value 注解，用于标记Bean注入的属性，提供 value 属性指定  bean具体属性值，可以是占位符，也可以是普通值。
+
+2. 向容器中添加字符串解析器，用于解析 @Value 注解。
+
+   1. 定义 StringValueResolver 字符串解析 接口，提供 resolveStringValue(String)  解析指定字符串 的方法。 
+
+   2. 完善 ConfigurableBeanFactory 工厂配置化接口，新增 addEmbeddedValueResolver(StringValueResolver) 添加字符串解析器 以及  resolveEmbeddedValue(String) 解析指定字符串 的方法。 
+
+   3. 完善 AbstractBeanFactory ，实现 ConfigurableBeanFactory 新增的  添加字符串解析器 以及 解析指定字符串 的方法。
+
+   4. 完善 PropertyPlaceholderConfigurer 配置类，新增 PlaceholderResolvingStringValueResolver 内部类，实现 StringValueResolver 接口 的 resolveStringValue(String) 方法 。该配置类利用 BeanFactoryPostProcessor 在Bean定义加载完之后执行的特点，在处理完 XML 文件的 属性之后，将其 解析操作 通过 PlaceholderResolvingStringValueResolver 内部类 封装，并通过 beanFactory.addEmbeddedValueResolver(StringValueResolver) 添加 字符串解析器。
+
+      ```java
+      package cn.ray.springframework.beans.factory;
+      
+      import cn.ray.springframework.beans.BeansException;
+      import cn.ray.springframework.beans.PropertyValue;
+      import cn.ray.springframework.beans.PropertyValues;
+      import cn.ray.springframework.beans.factory.config.BeanDefinition;
+      import cn.ray.springframework.beans.factory.config.BeanFactoryPostProcessor;
+      import cn.ray.springframework.core.io.DefaultResourceLoader;
+      import cn.ray.springframework.core.io.Resource;
+      import cn.ray.springframework.utils.StringValueResolver;
+      
+      import java.io.IOException;
+      import java.util.Properties;
+      
+      /**
+       * @author JOJO
+       * @date 2022/9/11 20:06
+       */
+      public class PropertyPlaceholderConfigurer implements BeanFactoryPostProcessor {
+      
+          /**
+           * Default placeholder prefix: {@value}
+           */
+          public static final String DEFAULT_PLACEHOLDER_PREFIX = "${";
+      
+          /**
+           * Default placeholder suffix: {@value}
+           */
+          public static final String DEFAULT_PLACEHOLDER_SUFFIX = "}";
+      
+          private String location;
+      
+          public void setLocation(String location) {
+              this.location = location;
+          }
+      
+          @Override
+          public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
+      
+              try {
+                  // 加载属性文件
+                  DefaultResourceLoader resourceLoader = new DefaultResourceLoader();
+                  Resource resource = resourceLoader.getResource(location);
+                  Properties properties = new Properties();
+                  properties.load(resource.getInputStream());
+      
+                  // 占位符替换属性值
+                  String[] beanDefinitionNames = beanFactory.getBeanDefinitionNames();
+                  for (String beanName : beanDefinitionNames) {
+                      BeanDefinition beanDefinition = beanFactory.getBeanDefinition(beanName);
+      
+                      PropertyValues propertyValues = beanDefinition.getPropertyValues();
+                      for (PropertyValue propertyValue : propertyValues.getPropertyValues()) {
+                          Object value = propertyValue.getValue();
+                          if (!(value instanceof String)) continue;
+                          value = resolvePlaceholder((String) value,properties);
+                          propertyValues.addPropertyValue(new PropertyValue(propertyValue.getName(),value));
+                      }
+                  }
+      
+                  // 向容器中添加字符串解析器，供解析@Value注解使用
+                  StringValueResolver stringValueResolver = new PlaceholderResolvingStringValueResolver(properties);
+                  beanFactory.addEmbeddedValueResolver(stringValueResolver);
+      
+              } catch (IOException e) {
+                  throw new BeansException("Could not load properties", e);
+              }
+          }
+      
+          /**
+           * 占位符替换属性值
+           * @param value bean属性定义的value
+           * @param properties 配置文件
+           * @return 配置文件中 指定 key 的 value
+           */
+          private String resolvePlaceholder(String value, Properties properties) {
+              String strVal = value;
+              StringBuilder buffer = new StringBuilder(strVal);
+              int startIdx = strVal.indexOf(DEFAULT_PLACEHOLDER_PREFIX);
+              int stopIdx = strVal.indexOf(DEFAULT_PLACEHOLDER_SUFFIX);
+              // 如果存在占位符，从配置文件中提取属性值
+              if (startIdx != -1 && stopIdx != -1 && startIdx < stopIdx) {
+                  // 占位符中 的 key
+                  String propKey = strVal.substring(startIdx + 2, stopIdx);
+                  // 从配置文件中 拿到指定 key 的 value
+                  String propVal = properties.getProperty(propKey);
+                  buffer.replace(startIdx, stopIdx + 1, propVal);
+              }
+              return buffer.toString();
+          }
+      
+          private class PlaceholderResolvingStringValueResolver implements StringValueResolver {
+      
+              private final Properties properties;
+      
+              public PlaceholderResolvingStringValueResolver(Properties properties) {
+                  this.properties = properties;
+              }
+      
+              @Override
+              public String resolveStringValue(String strVal) {
+                  return PropertyPlaceholderConfigurer.this.resolvePlaceholder(strVal, properties);
+              }
+      
+          }
+      }
+      ```
+
+3. 解析自定义注解
+
+   1. 完善 InstantiationAwareBeanPostProcessor 接口，新增 postProcessPropertyValues 在填充属性之前执行的方法。
+
+   2. 定义 AutowiredAnnotationBeanPostProcessor 类，实现 InstantiationAwareBeanPostProcessor, BeanFactoryAware 接口，在实现的 postProcessPropertyValues 方法中，通过 获取 beanClass的Field，扫描并解析其@Value 注解【 beanFactory.resolveEmbeddedValue(value) 】设置其属性值     BeanUtil.setFieldValue(bean, field.getName(), value)  ，扫描 @Autowired 以及 @Qualifier 并获取到 与 Field.Type 同类型 的 bean 设置其依赖对象 BeanUtil.setFieldValue(bean, field.getName(), dependentBean)  。
+
+      ```java
+      package cn.ray.springframework.beans.factory.annotation;
+      
+      import cn.hutool.core.bean.BeanUtil;
+      import cn.ray.springframework.beans.BeansException;
+      import cn.ray.springframework.beans.PropertyValues;
+      import cn.ray.springframework.beans.factory.BeanFactory;
+      import cn.ray.springframework.beans.factory.BeanFactoryAware;
+      import cn.ray.springframework.beans.factory.ConfigurableListableBeanFactory;
+      import cn.ray.springframework.beans.factory.config.InstantiationAwareBeanPostProcessor;
+      import cn.ray.springframework.utils.ClassUtil;
+      
+      import java.lang.reflect.Field;
+      
+      /**
+       * @author JOJO
+       * @date 2022/9/15 18:15
+       */
+      public class AutowiredAnnotationBeanPostProcessor implements InstantiationAwareBeanPostProcessor, BeanFactoryAware {
+      
+          private ConfigurableListableBeanFactory beanFactory;
+      
+          @Override
+          public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
+              this.beanFactory = (ConfigurableListableBeanFactory) beanFactory;
+          }
+      
+          @Override
+          public PropertyValues postProcessPropertyValues(PropertyValues pvs, Object bean, String beanName) throws BeansException {
+              // 1. 处理注解 @Value
+              Class<?> clazz = bean.getClass();
+              clazz = ClassUtil.isCglibProxyClass(clazz) ? clazz.getSuperclass() : clazz;
+      
+              Field[] declaredFields = clazz.getDeclaredFields();
+      
+              for (Field field : declaredFields) {
+                  Value valueAnnotation = field.getAnnotation(Value.class);
+                  if (null != valueAnnotation) {
+                      String value = valueAnnotation.value();
+                      value = beanFactory.resolveEmbeddedValue(value);
+                      BeanUtil.setFieldValue(bean, field.getName(), value);
+                  }
+              }
+      
+              // 2. 处理注解 @Autowired
+              for (Field field : declaredFields) {
+                  Autowired autowiredAnnotation = field.getAnnotation(Autowired.class);
+                  if (null != autowiredAnnotation) {
+                      Class<?> fieldType = field.getType();
+                      String dependentBeanName = null;
+                      Object dependentBean = null;
+                      Qualifier qualifierAnnotation = field.getAnnotation(Qualifier.class);
+                      if (null != qualifierAnnotation) {
+                          dependentBeanName = qualifierAnnotation.value();
+                          dependentBean = beanFactory.getBean(dependentBeanName, fieldType);
+                      } else {
+                          dependentBean = beanFactory.getBean(fieldType);
+                      }
+                      BeanUtil.setFieldValue(bean, field.getName(), dependentBean);
+                  }
+              }
+      
+            // 这里怎么获取到的 变化后的propertyValues ？
+            // 似乎返回什么都不是重点，这里已经进行了属性填充。。。  BeanUtil.setFieldValue
+              return pvs;
+          }
+      
+          @Override
+          public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+              return null;
+          }
+      
+          @Override
+          public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+              return null;
+          }
+      
+          @Override
+          public Object postProcessBeforeInstantiation(Class<?> beanClass, String beanName) throws BeansException {
+              return null;
+          }
+      
+      }
+      ```
+
+4. 扩展 Bean的生命周期
+
+   1. 完善 AbstractAutowireCapableBeanFactory 的 createBean 方法，在 其填充Bean属性之前，检索是否存在 InstantiationAwareBeanPostProcessor，并调用其 postProcessPropertyValues 进行Bean属性的注解注入。 
+
+      Tips：postProcessPropertyValues 方法 调用后，可能还存在 无注解的属性值，因此需要进行判断 pvs 是否为空，并将其添加到 BeanDefinition 中。
+
+      ```java
+      public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFactory implements AutowireCapableBeanFactory {
+      
+        …………
+          
+          @Override
+          protected Object createBean(String beanName, BeanDefinition beanDefinition, Object[] args) throws BeansException {
+              Object bean = null;
+              try {
+                  // 判断是否返回代理 Bean 对象
+                  bean = resolveBeforeInstantiation(beanName, beanDefinition);
+                  if (null != bean) {
+                      return bean;
+                  }
+                  // 实例化bean
+                  bean = createBeanInstance(beanDefinition, beanName, args);
+                  // 在填充 Bean 属性之前，允许 BeanPostProcessor 修改属性值
+                  applyBeanPostProcessorsBeforeApplyingPropertyValues(beanName,bean,beanDefinition);
+                  // 填充属性
+                  applyPropertyValues(beanName, bean, beanDefinition);
+                  // 执行 Bean 的初始化方法和 BeanPostProcessor 的前置和后置处理方法
+                  bean = initializeBean(beanName,bean,beanDefinition);
+              } catch (Exception e) {
+                  throw new BeansException("Instantiation of bean failed");
+              }
+      
+              // 注册实现了 DisposableBean 接口的 Bean 对象
+              registerDisposableBeanIfNecessary(beanName,bean,beanDefinition);
+      
+              // 判断 SCOPE_SINGLETON、SCOPE_PROTOTYPE
+              if (beanDefinition.isSingleton()) {
+                  registerSingleton(beanName, bean);
+              }
+      
+              return bean;
+          }
+      
+          /**
+           * 在设置 Bean 属性之前，允许 BeanPostProcessor 修改属性值
+           *
+           * @param beanName
+           * @param bean
+           * @param beanDefinition
+           */
+          protected void applyBeanPostProcessorsBeforeApplyingPropertyValues(String beanName, Object bean, BeanDefinition beanDefinition) {
+              for (BeanPostProcessor beanPostProcessor : getBeanPostProcessors()) {
+                  if (beanPostProcessor instanceof InstantiationAwareBeanPostProcessor){
+                      PropertyValues pvs = ((InstantiationAwareBeanPostProcessor) beanPostProcessor).postProcessPropertyValues(beanDefinition.getPropertyValues(), bean, beanName);
+                      if (null != pvs) {
+                          for (PropertyValue propertyValue : pvs.getPropertyValues()) {
+                              beanDefinition.getPropertyValues().addPropertyValue(propertyValue);
+                          }
+                      }
+                  }
+              }
+          }
+      
+      ………………
+      ```
+
+5. 完善 ClassPathBeanDefinitionScanner 的 doScan 方法，在其注册 BeanDefinition 之后，注册 AutowiredAnnotationBeanPostProcessor ，就不用手动去配置 XML 文件了。 
+
+   ```java
+   package cn.ray.springframework.context.annotation;
+   
+   import cn.hutool.core.util.StrUtil;
+   import cn.ray.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor;
+   import cn.ray.springframework.beans.factory.config.BeanDefinition;
+   import cn.ray.springframework.beans.factory.support.BeanDefinitionRegistry;
+   import cn.ray.springframework.stereotype.Component;
+   
+   import java.util.Set;
+   
+   /**
+    * @author JOJO
+    * @date 2022/9/11 21:26
+    */
+   public class ClassPathBeanDefinitionScanner extends ClassPathScanningCandidateComponentProvider {
+   
+       private BeanDefinitionRegistry registry;
+   
+       public ClassPathBeanDefinitionScanner(BeanDefinitionRegistry registry) {
+           this.registry = registry;
+       }
+   
+       public void doScan(String... basePackages) {
+           for (String basePackage : basePackages) {
+               Set<BeanDefinition> beanDefinitions = findCandidateComponents(basePackage);
+               for (BeanDefinition beanDefinition : beanDefinitions) {
+                   // 解析 Bean 的作用域 singleton、prototype
+                   String beanScope = resolveBeanScope(beanDefinition);
+                   if (StrUtil.isNotEmpty(beanScope)) {
+                       beanDefinition.setScope(beanScope);
+                   }
+                   registry.registerBeanDefinition(determineBeanName(beanDefinition), beanDefinition);
+               }
+           }
+           // 注册处理注解的 BeanPostProcessor（@Autowired、@Value）
+           registry.registerBeanDefinition("cn.ray.springframework.context.annotation.internalAutowiredAnnotationProcessor", new BeanDefinition(AutowiredAnnotationBeanPostProcessor.class));
+       }
+   
+       private String resolveBeanScope(BeanDefinition beanDefinition) {
+           Class<?> beanClass = beanDefinition.getBeanClass();
+           Scope scope = beanClass.getAnnotation(Scope.class);
+           if (null != scope) return scope.value();
+           return StrUtil.EMPTY;
+       }
+   
+       // 配置 beanName
+       private String determineBeanName(BeanDefinition beanDefinition) {
+           Class<?> beanClass = beanDefinition.getBeanClass();
+           Component component = beanClass.getAnnotation(Component.class);
+           String value = component.value();
+           if (StrUtil.isEmpty(value)) {
+               // 首字母小写
+               value = StrUtil.lowerFirst(beanClass.getSimpleName());
+           }
+           return value;
+       }
+   
+   }
+   ```
+
+### 结果：
+
+1. 外部接口通过内部类去实现，体现了良好的封装性，也更好的将两个具有一定关联的类组织在了一起，解决了共同的逻辑操作。
+2. 接口用 instanceof 判断，父类或同类用 isAssignableFrom 判断，注解用 getAnnotation(Annotation.class) 这些都相当于在类上的一些标识信息，便于一些方法找到功能点，并对其进行处理。像 Spring 中多次用到的 BeanPostProcessor。
+
+![step15-第 2 页.drawio](images/step14.drawio.png)
