@@ -2344,3 +2344,96 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader i
 2. 接口用 instanceof 判断，父类或同类用 isAssignableFrom 判断，注解用 getAnnotation(Annotation.class) 这些都相当于在类上的一些标识信息，便于一些方法找到功能点，并对其进行处理。像 Spring 中多次用到的 BeanPostProcessor。
 
 ![step15-第 2 页.drawio](images/step14.drawio.png)
+
+## Step15：调整 AOP 代理对象生成的时机 实现其属性注入
+
+### 实现： 
+
+之前 代理对象 的生成 是在 Bean对象创建之前，即不在 Bean 的生命周期，无法实现属性的注入，现在需要调整其生成时机，整个流程其实十分简单，迁移 之前 AOP代理方法 到 BeanPostProcessor 的 postProcessAfterInitialization 的方法，这样在 bean 属性注入并初始化之后，就会调用 其代理方法来完成 AOP 代理。 
+
+```java
+package cn.ray.springframework.aop.framework.autoproxy;
+
+import cn.ray.springframework.aop.*;
+import cn.ray.springframework.aop.aspectj.AspectJExpressionPointcutAdvisor;
+import cn.ray.springframework.aop.framework.ProxyFactory;
+import cn.ray.springframework.beans.BeansException;
+import cn.ray.springframework.beans.PropertyValues;
+import cn.ray.springframework.beans.factory.BeanFactory;
+import cn.ray.springframework.beans.factory.BeanFactoryAware;
+import cn.ray.springframework.beans.factory.config.InstantiationAwareBeanPostProcessor;
+import cn.ray.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.aopalliance.aop.Advice;
+import org.aopalliance.intercept.MethodInterceptor;
+
+import java.util.Collection;
+
+/**
+ * @author JOJO
+ * @date 2022/9/6 20:12
+ */
+public class DefaultAdvisorAutoProxyCreator implements BeanFactoryAware,InstantiationAwareBeanPostProcessor {
+
+    private DefaultListableBeanFactory beanFactory;
+
+    @Override
+    public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
+        this.beanFactory = (DefaultListableBeanFactory) beanFactory;
+    }
+
+    private boolean isInfrastructureClass(Class<?> beanClass) {
+        return Advice.class.isAssignableFrom(beanClass) || Pointcut.class.isAssignableFrom(beanClass) || Advisor.class.isAssignableFrom(beanClass);
+    }
+
+    @Override
+    public Object postProcessBeforeInstantiation(Class<?> beanClass, String beanName) throws BeansException {
+        return null;
+    }
+
+    @Override
+    public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
+        return bean;
+    }
+
+    @Override
+    public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+        if (isInfrastructureClass(bean.getClass())) return bean;
+
+        Collection<AspectJExpressionPointcutAdvisor> advisors = beanFactory.getBeansOfType(AspectJExpressionPointcutAdvisor.class).values();
+
+        for (AspectJExpressionPointcutAdvisor advisor : advisors) {
+            ClassFilter classFilter = advisor.getPointcut().getClassFilter();
+            if (!classFilter.matches(bean.getClass())) continue;
+
+            AdvisedSupport advisedSupport = new AdvisedSupport();
+
+            TargetSource targetSource = new TargetSource(bean);
+            advisedSupport.setTargetSource(targetSource);
+            advisedSupport.setMethodInterceptor((MethodInterceptor) advisor.getAdvice());
+            advisedSupport.setMethodMatcher(advisor.getPointcut().getMethodMatcher());
+            advisedSupport.setProxyTargetClass(false);
+
+            return new ProxyFactory(advisedSupport).getProxy();
+
+        }
+        return bean;
+    }
+
+		// 用于判断实例化之后的对象是否已经属性填充
+		// 当前已生成填充属性之后的代理对象,故返回true
+    @Override
+    public Boolean postProcessAfterInstantiation(Object bean, String beanName) throws BeansException {
+        return true;
+    }
+
+    @Override
+    public PropertyValues postProcessPropertyValues(PropertyValues pvs, Object bean, String beanName) throws BeansException {
+        return pvs;
+    }
+}
+
+```
+
+> Tip： 1. 因为此时 代理对象的生成 是在 Bean实例化之后，所以 DefaultAdvisorAutoProxyCreator 配置 TargetSource 需将 targetSource = new TargetSource(beanClass.getDeclaredConstructor().newInstance()); 修改为 targetSource = new TargetSource(bean);  ，否则将代理新的实例化对象，从而导致属性无法注入。
+
+![createBean](images/createBean.png)
